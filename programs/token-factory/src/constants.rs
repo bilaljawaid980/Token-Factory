@@ -8,7 +8,7 @@ pub const MINT_AUTHORITY_SEED: &[u8] = b"mint_authority";
 pub const PLATFORM_FEE_LAMPORTS: u64 = 100_000_000;
 
 // Platform fee wallet — replace with your actual devnet wallet pubkey
-pub const PLATFORM_FEE_WALLET: &str = "7LA1ZMrc4j19sCSnXFmmiLvjo6KVWENwv9aS4oXYKq2E";
+pub const PLATFORM_FEE_WALLET: &str = "6RyiHzXdvrucGp332NML2xNrzTzBGqKGHjUdWzdsQdtW";
 
 // Token-2022 extension space constants
 pub const MAX_NAME_LENGTH: usize = 32;

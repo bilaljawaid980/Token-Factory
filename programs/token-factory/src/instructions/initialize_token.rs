@@ -31,11 +31,8 @@ pub struct InitializeToken<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
 
-    /// CHECK: validated by address constraint
-    #[account(
-        mut,
-        address = PLATFORM_FEE_WALLET.parse::<Pubkey>().unwrap()
-    )]
+    /// CHECK: fee wallet validated in handler against PLATFORM_FEE_WALLET constant
+    #[account(mut)]
     pub fee_wallet: AccountInfo<'info>,
 
     /// CHECK: fresh mint keypair, created manually via CPI
@@ -57,7 +54,15 @@ pub struct InitializeToken<'info> {
 }
 
 pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> Result<()> {
-    // 1. Validate params
+    // 1. Validate fee wallet matches expected address
+    let expected = PLATFORM_FEE_WALLET.parse::<Pubkey>()
+        .map_err(|_| error!(TokenFactoryError::PlatformFeeNotPaid))?;
+    require!(
+        ctx.accounts.fee_wallet.key() == expected,
+        TokenFactoryError::PlatformFeeNotPaid
+    );
+
+    // 2. Validate params
     require!(params.name.len() <= MAX_NAME_LENGTH, TokenFactoryError::NameTooLong);
     require!(params.symbol.len() <= MAX_SYMBOL_LENGTH, TokenFactoryError::SymbolTooLong);
     require!(params.uri.len() <= MAX_URI_LENGTH, TokenFactoryError::UriTooLong);
@@ -69,7 +74,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         TokenFactoryError::InvalidSupplyCap
     );
 
-    // 2. Collect platform fee
+    // 3. Collect platform fee
     system_program::transfer(
         CpiContext::new(
             ctx.accounts.system_program.to_account_info(),
@@ -81,7 +86,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         PLATFORM_FEE_LAMPORTS,
     )?;
 
-    // 3. Calculate space for mint + extensions only
+    // 4. Calculate space for mint + extensions only
     let extension_types = vec![
         ExtensionType::MetadataPointer,
         ExtensionType::TransferFeeConfig,
@@ -89,7 +94,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
     let mint_size = ExtensionType::try_calculate_account_len::<MintState>(&extension_types)
         .map_err(|_| error!(TokenFactoryError::NameTooLong))?;
 
-    // 4. Calculate extra space needed for metadata and pre-fund it
+    // 5. Calculate metadata space and pre-fund
     let metadata = TokenMetadata {
         name:   params.name.clone(),
         symbol: params.symbol.clone(),
@@ -106,7 +111,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         .map_err(|_| error!(TokenFactoryError::NameTooLong))?;
     let total_size = mint_size + 4 + usize::from(metadata_size);
 
-    // 5. Allocate mint account with full size (mint + metadata space)
+    // 6. Allocate mint account
     let lamports = ctx.accounts.rent.minimum_balance(total_size);
     system_program::create_account(
         CpiContext::new(
@@ -117,14 +122,13 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
             },
         ),
         lamports,
-        mint_size as u64,   // allocate only mint size initially
+        mint_size as u64,
         &spl_token_2022::ID,
     )?;
 
-    // 6. Top up lamports for metadata reallocation
+    // 7. Top up for metadata reallocation
     let current_lamports = ctx.accounts.mint.lamports();
     if lamports > current_lamports {
-        let diff = lamports - current_lamports;
         system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -133,11 +137,11 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
                     to:   ctx.accounts.mint.to_account_info(),
                 },
             ),
-            diff,
+            lamports - current_lamports,
         )?;
     }
 
-    // 7. Init MetadataPointer (before InitializeMint2)
+    // 8. Init MetadataPointer
     let mint_key = ctx.accounts.mint.key();
     metadata_pointer_initialize(
         CpiContext::new(
@@ -151,7 +155,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         Some(mint_key),
     )?;
 
-    // 8. Init TransferFeeConfig (before InitializeMint2)
+    // 9. Init TransferFeeConfig
     transfer_fee_initialize(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -166,7 +170,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         params.transfer_fee_max,
     )?;
 
-    // 9. InitializeMint2 (after all extensions)
+    // 10. InitializeMint2
     anchor_spl::token_2022::initialize_mint2(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -179,7 +183,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         Some(&ctx.accounts.creator.key()),
     )?;
 
-    // 10. Init on-chain metadata (after InitializeMint2)
+    // 11. Init on-chain metadata
     token_metadata_initialize(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -196,7 +200,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         params.uri.clone(),
     )?;
 
-    // 11. Write social links
+    // 12. Write social links
     for (key, value) in [
         ("website",  params.website.clone()),
         ("twitter",  params.twitter.clone()),
@@ -217,7 +221,7 @@ pub fn handler(ctx: Context<InitializeToken>, params: InitializeTokenParams) -> 
         )?;
     }
 
-    // 12. Save TokenConfig PDA
+    // 13. Save TokenConfig PDA
     let config = &mut ctx.accounts.token_config;
     config.creator                  = ctx.accounts.creator.key();
     config.mint                     = ctx.accounts.mint.key();
