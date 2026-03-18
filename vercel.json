@@ -1,5 +1,6 @@
 {
+  "outputDirectory": "ui",
   "rewrites": [
-    { "source": "/(.*)", "destination": "/ui/index.html" }
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
